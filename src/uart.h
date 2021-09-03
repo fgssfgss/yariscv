@@ -7,4 +7,6 @@
 
 void uart_init(void);
 
+void uart_write(int ch);
+
 #endif //YARISCVEMU_UART_H

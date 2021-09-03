@@ -7,9 +7,14 @@
 
 #include <stdio.h>
 
-void logger_init(FILE *fp);
 void logger_init_path(const char *path);
-void logger_disable(void);
-void logger(char *fmt, ...);
+
+#ifndef NDEBUG
+#define logger(fmt, ...) logger_real(fmt, ##__VA_ARGS__)
+#else
+#define logger(fmt, ...)
+#endif
+
+void logger_real(char *fmt, ...);
 
 #endif //YARISCVEMU_LOGGER_H

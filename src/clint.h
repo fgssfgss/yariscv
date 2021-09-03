@@ -8,6 +8,9 @@
 #include <stdint.h>
 
 void clint_init(void);
-void clint_iter(uint32_t *mip);
+
+void clint_check_time(void);
+
+uint64_t clint_mtime(void);
 
 #endif //YARISCVEMU_CLINT_H

@@ -7,33 +7,81 @@
 #include "mmu.h"
 #include "clint.h"
 #include "logger.h"
+#include "tlb.h"
 
 #define get_instr_piece(opcode, start, mask) (((opcode) >> start) & mask)
-#define GET_OPCODE(opcode) get_instr_piece(opcode, 0, 0x7f)
-#define GET_FUNCT7(opcode) get_instr_piece(opcode, 25, 0x7f)
-#define GET_FUNCT3(opcode) get_instr_piece(opcode, 12, 0x7)
-#define GET_RS2(opcode) get_instr_piece(opcode, 20, 0x1f)
-#define GET_RS1(opcode) get_instr_piece(opcode, 15, 0x1f)
-#define GET_RD(opcode) get_instr_piece(opcode, 7, 0x1f)
-#define GET_IMM_U(opcode) sext(get_instr_piece(opcode, 12, 0xfffff) << 12, 32)
-#define GET_IMM_I(opcode) sext(get_instr_piece(opcode, 20, 0xfff), 12)
-#define GET_IMM_S(opcode) sext(get_instr_piece(opcode, 7, 0x1f) | (get_instr_piece(opcode, 25, 0x7f) << 5), 12)
-#define GET_IMM_B(opcode) sext((get_instr_piece(opcode, 8, 0xf) << 1) |\
+#define GET_OPCODE(opcode) (get_instr_piece(opcode, 0, 0x7f))
+#define GET_FUNCT7(opcode) (get_instr_piece(opcode, 25, 0x7f))
+#define GET_FUNCT3(opcode) (get_instr_piece(opcode, 12, 0x7))
+#define GET_RS2(opcode) (get_instr_piece(opcode, 20, 0x1f))
+#define GET_RS1(opcode) (get_instr_piece(opcode, 15, 0x1f))
+#define GET_RD(opcode) (get_instr_piece(opcode, 7, 0x1f))
+#define GET_IMM_U(opcode) (sext(get_instr_piece(opcode, 12, 0xfffff) << 12, 32))
+#define GET_IMM_I(opcode) (sext(get_instr_piece(opcode, 20, 0xfff), 12))
+#define GET_IMM_S(opcode) (sext(get_instr_piece(opcode, 7, 0x1f) | (get_instr_piece(opcode, 25, 0x7f) << 5), 12))
+#define GET_IMM_B(opcode) (sext((get_instr_piece(opcode, 8, 0xf) << 1) |\
                                  (get_instr_piece(opcode, 25, 0x3f) << 5) |\
                                  (get_instr_piece(opcode, 7, 0x1) << 11) |\
-                                 (get_instr_piece(opcode, 31, 0x1) << 12), 13)
-#define GET_IMM_J(opcode) sext((get_instr_piece(opcode, 21, 0x3ff) << 1) |\
+                                 (get_instr_piece(opcode, 31, 0x1) << 12), 13))
+#define GET_IMM_J(opcode) (sext((get_instr_piece(opcode, 21, 0x3ff) << 1) |\
                                  (get_instr_piece(opcode, 20, 0x1) << 11) |\
                                  (get_instr_piece(opcode, 12, 0xff) << 12) |\
-                                 (get_instr_piece(opcode, 31, 0x1) << 20), 21)
+                                 (get_instr_piece(opcode, 31, 0x1) << 20), 21))
+
+
+/* MACRO FOR COMPRESSED INSTR */
+#define GET_C_FUNCT3(opcode) (get_instr_piece(opcode, 13, 0x7))
+#define GET_C_RD(opcode) (get_instr_piece(opcode, 7, 0x1f))
+#define GET_C_RS2(opcode) (get_instr_piece(opcode, 2, 0x1f))
+#define GET_C_RS1_COMP(opcode) (get_instr_piece(opcode, 7, 0x7) | 8)
+#define GET_C_RS2_COMP(opcode) (get_instr_piece(opcode, 2, 0x7) | 8)
+#define GET_C_IMM_CJ(opcode) (sext(get_instr_piece(opcode, 2, 0x1) << 5 | \
+                                   get_instr_piece(opcode, 3, 0x7) << 1 | \
+                                   get_instr_piece(opcode, 6, 0x1) << 7 | \
+                                   get_instr_piece(opcode, 7, 0x1) << 6 | \
+                                   get_instr_piece(opcode, 8, 0x1) << 10 | \
+                                   get_instr_piece(opcode, 9, 0x3) << 8 | \
+                                   get_instr_piece(opcode, 11, 0x1) << 4 | \
+                                   get_instr_piece(opcode, 12, 0x1) << 11, 12))
+#define GET_C_IMM_CI(opcode) (get_instr_piece(opcode, 2, 0x3) << 6 | \
+                                   get_instr_piece(opcode, 4, 0x7) << 2 | \
+                                   get_instr_piece(opcode, 12, 0x1) << 5)
+#define GET_C_IMM_CB(opcode) (sext(get_instr_piece(opcode, 2, 0x1f) | \
+                                   get_instr_piece(opcode, 12, 0x1) << 5, 6))
+#define GET_C_IMM_CBU(opcode) (get_instr_piece(opcode, 2, 0x1f) | \
+                                   get_instr_piece(opcode, 12, 0x1) << 5)
+#define GET_C_IMM_CS(opcode) (get_instr_piece(opcode, 5, 0x1) << 6 | \
+                                   get_instr_piece(opcode, 6, 0x1) << 2 | \
+                                   get_instr_piece(opcode, 10, 0x7) << 3)
+#define GET_C_IMM_CSS(opcode) (get_instr_piece(opcode, 7, 0x3) << 6 | \
+                                    get_instr_piece(opcode, 9, 0xf) << 2)
+#define GET_C_IMM_CSP(opcode) (sext(get_instr_piece(opcode, 2, 0x1) << 5 | \
+                                    get_instr_piece(opcode, 3, 0x3) << 7 | \
+                                    get_instr_piece(opcode, 5, 0x1) << 6 | \
+                                    get_instr_piece(opcode, 6, 0x1) << 4 | \
+                                    get_instr_piece(opcode, 12, 0x1) << 9, 10))
+#define GET_C_IMM_CIW(opcode) (get_instr_piece(opcode, 5, 0x1) << 3 | \
+                                    get_instr_piece(opcode, 6, 0x1) << 2 | \
+                                    get_instr_piece(opcode, 7, 0xf) << 6 | \
+                                    get_instr_piece(opcode, 11, 0x3) << 4)
+#define GET_C_IMM_CBR(opcode) (sext(get_instr_piece(opcode, 2, 0x1) << 5 | \
+                                    get_instr_piece(opcode, 3, 0x3) << 1 | \
+                                    get_instr_piece(opcode, 5, 0x3) << 6 | \
+                                    get_instr_piece(opcode, 10, 0x3) << 3 | \
+                                    get_instr_piece(opcode, 12, 0x1) << 8, 9))
+
 
 #define PR(fmt, ...) do {                         \
-        if (debug)                                \
             logger(fmt "\n", ##__VA_ARGS__);      \
 } while(0)
 
 #define NEXT_INSTR do {                 \
             s.pc += 4;                  \
+            goto next_instr;            \
+} while(0)
+
+#define C_NEXT_INSTR do {               \
+            s.pc += 2;                  \
             goto next_instr;            \
 } while(0)
 
@@ -56,7 +104,6 @@
 #define STORE_MEM_FAULT MMU_EXCPT((res == MMU_ACCESS_FAULT) ? STORE_ACCESS_FAULT : STORE_PAGE_FAULT, addr)
 
 static rv32_state s;
-static bool debug = true;
 
 static inline int32_t sext(int32_t val, int n) {
 	return (val << (32 - n)) >> (32 - n);
@@ -193,11 +240,11 @@ typedef enum {
 } mstatus_flags;
 
 const uint32_t mstatus_mask = MSTATUS_SIE | MSTATUS_MIE | MSTATUS_SPIE | MSTATUS_MPIE
-							| MSTATUS_SPP | MSTATUS_MPP | MSTATUS_FS | MSTATUS_XS
-							| MSTATUS_MPRV | MSTATUS_SUM | MSTATUS_MXR | MSTATUS_SD;
+                              | MSTATUS_SPP | MSTATUS_MPP | MSTATUS_FS | MSTATUS_XS
+                              | MSTATUS_MPRV | MSTATUS_SUM | MSTATUS_MXR | MSTATUS_SD;
 
 const uint32_t sstatus_mask = MSTATUS_SIE | MSTATUS_SPIE | MSTATUS_SPP | MSTATUS_FS
-							| MSTATUS_XS | MSTATUS_SUM | MSTATUS_MXR | MSTATUS_SD;
+                              | MSTATUS_XS | MSTATUS_SUM | MSTATUS_MXR | MSTATUS_SD;
 
 const uint32_t xcounteren_mask = ((1 << 0) | (1 << 2));
 
@@ -225,18 +272,12 @@ typedef enum {
 	MACHINE_EXTERNAL_INTERRUPT = 0x80000000 + 11
 } traps;
 
-
-typedef enum {
-	PRV_U = 0,
-	PRV_S = 1,
-	PRV_M = 3
-} priv_m;
-
 #define MISA_SUPER   (1 << ('S' - 'A'))
 #define MISA_USER    (1 << ('U' - 'A'))
 #define MISA_I       (1 << ('I' - 'A'))
 #define MISA_M       (1 << ('M' - 'A'))
 #define MISA_A       (1 << ('A' - 'A'))
+#define MISA_C       (1 << ('C' - 'A'))
 #define MISA_32BIT   (1 << 30)
 
 static inline char *get_op_name(ops op) {
@@ -262,36 +303,35 @@ static inline char *get_op_name(ops op) {
 
 static inline void mstatus_dump(void) {
 	logger("sie %d | mie %d | spie %d | mpie %d | spp %d | mpp %d | fs %d | xs %d | sum %d | mxr %d | mprv %d | sd %d\n",
-		   s.mstatus_sie, s.mstatus_mie, s.mstatus_spie,
-		   s.mstatus_mpie, s.mstatus_spp, s.mstatus_mpp,
-		   s.mstatus_fs, s.mstatus_xs, s.mstatus_sum,
-		   s.mstatus_mxr, s.mstatus_mprv, s.mstatus_sd);
+	       s.mstatus_sie, s.mstatus_mie, s.mstatus_spie,
+	       s.mstatus_mpie, s.mstatus_spp, s.mstatus_mpp,
+	       s.mstatus_fs, s.mstatus_xs, s.mstatus_sum,
+	       s.mstatus_mxr, s.mstatus_mprv, s.mstatus_sd);
 }
 
 static inline uint32_t mstatus_get(uint32_t mask) {
 	uint32_t val = 0;
 	s.mstatus_sd = (s.mstatus_fs == MSTATUS_FS) ||
-		     (s.mstatus_xs == MSTATUS_XS);
+	               (s.mstatus_xs == MSTATUS_XS);
 
 	val = (s.mstatus_sie << MSTATUS_SIE_SHIFT) |
-			(s.mstatus_mie << MSTATUS_MIE_SHIFT) |
-			(s.mstatus_spie << MSTATUS_SPIE_SHIFT) |
-			(s.mstatus_mpie << MSTATUS_MPIE_SHIFT) |
-			(s.mstatus_spp << MSTATUS_SPP_SHIFT) |
-			(s.mstatus_mpp << MSTATUS_MPP_SHIFT) |
-			(s.mstatus_fs << MSTATUS_FS_SHIFT) |
-			(s.mstatus_xs << MSTATUS_XS_SHIFT) |
-			(s.mstatus_sum << MSTATUS_SUM_SHIFT) |
-			(s.mstatus_mxr << MSTATUS_MXR_SHIFT) |
-			(s.mstatus_mprv << MSTATUS_MPRV_SHIFT) |
-			(s.mstatus_sd << MSTATUS_SD_SHIFT);
+	      (s.mstatus_mie << MSTATUS_MIE_SHIFT) |
+	      (s.mstatus_spie << MSTATUS_SPIE_SHIFT) |
+	      (s.mstatus_mpie << MSTATUS_MPIE_SHIFT) |
+	      (s.mstatus_spp << MSTATUS_SPP_SHIFT) |
+	      (s.mstatus_mpp << MSTATUS_MPP_SHIFT) |
+	      (s.mstatus_fs << MSTATUS_FS_SHIFT) |
+	      (s.mstatus_xs << MSTATUS_XS_SHIFT) |
+	      (s.mstatus_sum << MSTATUS_SUM_SHIFT) |
+	      (s.mstatus_mxr << MSTATUS_MXR_SHIFT) |
+	      (s.mstatus_mprv << MSTATUS_MPRV_SHIFT) |
+	      (s.mstatus_sd << MSTATUS_SD_SHIFT);
 
 	val &= mask;
 	return val;
 }
 
 static inline void mstatus_set(uint32_t val, uint32_t mask) {
-	/* drop tlb here if needed */
 	/* maybe do something with fs */
 
 	val = (mstatus_get(-1) & ~mask) | (val & mask);
@@ -351,19 +391,18 @@ static void handle_sret() {
 
 static void raise_exception(uint32_t cause, uint32_t tval) {
 	bool s_prv = false;
+	bool is_interrupt = cause & 0x80000000;
+	uint32_t icause = cause & 31;
 
 	if (s.prv <= PRV_S) {
-		if (cause & 0x80000000) {
-			s_prv = ((s.mideleg >> (cause & 31)) & 0x1);
+		if (is_interrupt) {
+			s_prv = ((s.mideleg >> icause) & 0x1);
 		} else {
 			s_prv = ((s.medeleg >> cause) & 0x1);
 		}
 	} else {
 		s_prv = false;
 	}
-
-	logger("going into %s mode, pc is 0x%x, cause is 0x%x, tval is 0x%x, epc 0x%x, prev mode is %d\n",
-		   s_prv ? "PRV_S" : "PRV_M", s.pc, cause, tval, s_prv ? s.sepc : s.mepc, s.prv);
 
 	if (s_prv) {
 		s.mstatus_spie = s.mstatus_sie;
@@ -373,7 +412,7 @@ static void raise_exception(uint32_t cause, uint32_t tval) {
 		s.scause = cause;
 		s.stval = tval;
 		s.sepc = s.pc;
-		s.pc = s.stvec + (s.s_vectored_interrupts ? cause * 4 : 0);
+		s.pc = s.stvec + (s.s_vectored_interrupts && is_interrupt ? icause * 4 : 0);
 	} else {
 		s.mstatus_mpie = s.mstatus_mie;
 		s.mstatus_mie = 0;
@@ -382,9 +421,11 @@ static void raise_exception(uint32_t cause, uint32_t tval) {
 		s.mcause = cause;
 		s.mtval = tval;
 		s.mepc = s.pc;
-		s.pc = s.mtvec + (s.m_vectored_interrupts ? cause * 4 : 0);
+		s.pc = s.mtvec + (s.m_vectored_interrupts && is_interrupt ? icause * 4 : 0);
 	}
 
+	logger("raise_exception: %s mode, pc is 0x%x, cause is 0x%x, tval is 0x%x, epc 0x%x, prev mode is %d\n",
+	       s_prv ? "PRV_S" : "PRV_M", s.pc, cause, tval, s_prv ? s.sepc : s.mepc, s.prv);
 	mstatus_dump();
 }
 
@@ -392,60 +433,8 @@ static void raise_interrupt(traps num) {
 	raise_exception(num, 0);
 }
 
-void rv32_raise_trap(uint32_t cause, uint32_t tval) {
-	raise_exception(cause, tval);
-}
-
-static void raise_interrupts() {
-	uint32_t pending_ints = s.mie & s.mip;
-	uint32_t en_ints = 0;
-
-	if (!pending_ints) {
-		return;
-	}
-
-	switch (s.prv) {
-		case PRV_M:
-			if (s.mstatus_mie) {
-				en_ints = ~s.mideleg;
-			}
-			break;
-		case PRV_S:
-			en_ints = ~s.mideleg;
-			if (s.mstatus_sie) {
-				en_ints |= s.mideleg;
-			}
-			break;
-		case PRV_U:
-			en_ints = -1;
-			break;
-		default:
-			break;
-	}
-
-	en_ints &= pending_ints;
-
-	if (en_ints == 0) {
-		return;
-	}
-
-	if (en_ints & MIP_SSIP) {
-		raise_interrupt(SUPERVISOR_SOFTWARE_INTERRUPT);
-	} else if (en_ints & MIP_STIP) {
-		raise_interrupt(SUPERVISOR_TIMER_INTERRUPT);
-	} else if (en_ints & MIP_SEIP) {
-		raise_interrupt(SUPERVISOR_EXTERNAL_INTERRUPT);
-	} else if (en_ints & MIP_MSIP) {
-		raise_interrupt(MACHINE_SOFTWARE_INTERRUPT);
-	} else if (en_ints & MIP_MTIP) {
-		raise_interrupt(MACHINE_TIMER_INTERRUPT);
-	} else if (en_ints & MIP_MEIP) {
-		raise_interrupt(MACHINE_EXTERNAL_INTERRUPT);
-	}
-}
-
 // true if read successful, false for invalid csr or unable to read
-static inline bool csr_read(uint32_t csr, uint32_t *data) {
+static bool csr_read(uint32_t csr, uint32_t *data) {
 	uint32_t val = 0;
 
 	if (s.prv < ((csr >> 8) & 3)) {
@@ -454,17 +443,40 @@ static inline bool csr_read(uint32_t csr, uint32_t *data) {
 
 	switch (csr) {
 		case 0xc00: // cycle
-			// TODO: implement me
-			break;
-		case 0xc01: // time
-			break;
 		case 0xc02: // instret
+			if (s.prv < PRV_M) {
+				uint32_t counteren;
+				if (s.prv < PRV_S) {
+					counteren = s.scounteren;
+				} else {
+					counteren = s.mcounteren;
+				}
+				if (((counteren >> (csr & 0x1f)) & 1) == 0) {
+					return false;
+				}
+			}
+			val = s.instr_cnt & 0xffffffff;
 			break;
 		case 0xc80: // cycleh
+		case 0xc82: // instreth
+			if (s.prv < PRV_M) {
+				uint32_t counteren;
+				if (s.prv < PRV_S) {
+					counteren = s.scounteren;
+				} else {
+					counteren = s.mcounteren;
+				}
+				if (((counteren >> (csr & 0x1f)) & 1) == 0) {
+					return false;
+				}
+			}
+			val = s.instr_cnt >> 32;
+			break;
+		case 0xc01: // time
+			val = clint_mtime() & 0xffffffff;
 			break;
 		case 0xc81: // timeh
-			break;
-		case 0xc82: // instreth
+			val = clint_mtime() >> 32;
 			break;
 		case 0x100: // sstatus
 			val = mstatus_get(sstatus_mask);
@@ -572,7 +584,7 @@ static inline bool csr_read(uint32_t csr, uint32_t *data) {
 	return true;
 }
 
-static inline bool csr_write(uint32_t csr, uint32_t data) {
+static bool csr_write(uint32_t csr, uint32_t data) {
 	if ((csr & 0xc00) == 0xc00) {
 		return false;
 	}
@@ -607,8 +619,11 @@ static inline bool csr_write(uint32_t csr, uint32_t data) {
 			s.mip = (s.mip & ~s.mideleg) | (data & s.mideleg);
 			break;
 		case 0x180: // satp
+			/* remove ASID */
+			data &= ~(((1 << 9) - 1) << 22);
 			s.satp = data;
 			logger("satp set to 0x%x\n", s.satp);
+			tlb_flush();
 			break;
 		case 0x300: // mstatus
 			mstatus_set(data, mstatus_mask);
@@ -685,9 +700,360 @@ static inline bool csr_write(uint32_t csr, uint32_t data) {
 	return true;
 }
 
+static inline bool rv32_exec_compressed_instr(uint16_t instr) {
+	uint8_t opcode = instr & 0x3;
+
+	switch (opcode) {
+		case 0x0:
+		case 0x1:
+		case 0x2:
+			break;
+		default:
+			goto not_compressed_instr;
+	}
+
+	PR("OPCODE IS 0x%04x", instr);
+
+	switch (opcode) {
+		case 0x0: { // quadrant 0
+			if (instr == 0x0) {
+				ILL_INSTR;
+			}
+
+			uint8_t funct3 = GET_C_FUNCT3(instr);
+
+			switch (funct3) {
+				case 0b000: { // C.ADDI4SPN
+					uint8_t rd = GET_C_RS2_COMP(instr);
+					int32_t imm = GET_C_IMM_CIW(instr);
+
+					PR("C.ADDI4SPN %s, 0x%x", get_ireg_name(rd), imm);
+
+					if (imm != 0) {
+						s.reg[rd] = s.reg[2] + imm;
+					} else {
+						ILL_INSTR;
+					}
+
+					C_NEXT_INSTR;
+				}
+				case 0b010: { // C.LW
+					uint8_t rs1 = GET_C_RS1_COMP(instr);
+					uint8_t rs2 = GET_C_RS2_COMP(instr);
+					uint32_t imm = GET_C_IMM_CS(instr);
+					uint32_t addr = (int32_t) (s.reg[rs1] + imm);
+					uint32_t data = 0;
+					mmu_error_t res = MMU_OK;
+
+					PR("C.LW %s %s %x", get_ireg_name(rs1), get_ireg_name(rs2), imm);
+
+					if ((res = mmu_read_u32(addr, &data)) != MMU_OK) {
+						LOAD_MEM_FAULT;
+					}
+
+					s.reg[rs2] = data;
+					C_NEXT_INSTR;
+				}
+				case 0b110: { // C.SW
+					uint8_t rs1 = GET_C_RS1_COMP(instr);
+					uint8_t rs2 = GET_C_RS2_COMP(instr);
+					uint32_t imm = GET_C_IMM_CS(instr);
+					uint32_t addr = (int32_t) (s.reg[rs1] + imm);
+					mmu_error_t res = MMU_OK;
+
+					PR("C.SW %s %s %x", get_ireg_name(rs1), get_ireg_name(rs2), imm);
+
+					if ((res = mmu_write_u32(addr, s.reg[rs2])) != MMU_OK) {
+						STORE_MEM_FAULT;
+					}
+
+					C_NEXT_INSTR;
+				}
+				default:
+					ILL_INSTR;
+			}
+		}
+			break;
+		case 0x1: { // quadrant 1
+			uint8_t funct3 = GET_C_FUNCT3(instr);
+
+			switch (funct3) {
+				case 0b000: { // C.ADDI
+					uint8_t rd = GET_C_RD(instr);
+					int32_t imm = GET_C_IMM_CB(instr);
+
+					if (rd != 0) {
+						PR("C.ADDI %s, %x", get_ireg_name(rd), imm);
+
+						s.reg[rd] = s.reg[rd] + imm;
+					} else { // C.NOP
+						PR("C.NOP");
+					}
+
+					C_NEXT_INSTR;
+				}
+				case 0b001: { // C.JAL
+					int32_t imm = GET_C_IMM_CJ(instr);
+					uint32_t val = s.pc + 2;
+
+					PR("C.JAL ra, 0x%x", imm);
+
+					s.pc = (int32_t) (s.pc + imm);
+					s.reg[1] = val;
+
+					JUMP_INSTR;
+				}
+				case 0b010: { // C.LI
+					uint8_t rd = GET_C_RD(instr);
+					int32_t imm = GET_C_IMM_CB(instr);
+					PR("C.LI %s %x", get_ireg_name(rd), imm);
+					if (rd != 0) {
+						s.reg[rd] = imm;
+					}
+					C_NEXT_INSTR;
+				}
+				case 0b011: {
+					uint8_t rd = GET_C_RD(instr);
+
+					if (rd == 2) { // C.ADDI16SP
+						int32_t imm = GET_C_IMM_CSP(instr);
+						if (imm == 0) {
+							ILL_INSTR;
+						}
+						PR("C.ADDI16SP 0x%x", imm);
+						s.reg[2] = (int32_t) (s.reg[2] + imm);
+						C_NEXT_INSTR;
+					} else { // C.LUI
+						uint8_t rd = GET_C_RD(instr);
+						int32_t imm = sext(GET_C_IMM_CB(instr) << 12, 18);
+						PR("C.LUI %s 0x%x", get_ireg_name(rd), imm);
+						if (rd != 0 && rd != 2) {
+							s.reg[rd] = imm;
+						}
+						C_NEXT_INSTR;
+					}
+				}
+				case 0b100: {
+					uint8_t param1 = get_instr_piece(instr, 10, 0x3);
+
+					if (param1 == 0x0) { // C.SRLI
+						uint8_t rd = GET_C_RS1_COMP(instr);
+						uint8_t shamt = GET_C_IMM_CBU(instr);
+
+						PR("C.SRLI %s %x", get_ireg_name(rd), shamt);
+
+						if (!(shamt & (1 << 5))) {
+							s.reg[rd] = s.reg[rd] >> shamt;
+						} else {
+							ILL_INSTR;
+						}
+
+						C_NEXT_INSTR;
+					} else if (param1 == 0x1) { // C.SRAI
+						uint8_t rd = GET_C_RS1_COMP(instr);
+						uint8_t shamt = GET_C_IMM_CBU(instr);
+
+						PR("C.SRAI %s %x", get_ireg_name(rd), shamt);
+
+						if (!(shamt & (1 << 5))) {
+							s.reg[rd] = (int32_t) s.reg[rd] >> shamt;
+						}
+
+						C_NEXT_INSTR;
+					} else if (param1 == 0x2) { // C.ANDI
+						uint8_t rd = GET_C_RS1_COMP(instr);
+						int32_t imm = GET_C_IMM_CB(instr);
+						PR("C.ANDI %s 0x%x", get_ireg_name(rd), imm);
+						s.reg[rd] = s.reg[rd] & imm;
+						C_NEXT_INSTR;
+					} else {
+						uint8_t param2 = get_instr_piece(instr, 5, 0x3)
+						                 | get_instr_piece(instr, 12, 0x1) << 3;
+
+						uint8_t rd = GET_C_RS1_COMP(instr);
+						uint8_t rs2 = GET_C_RS2_COMP(instr);
+
+						switch (param2) {
+							case 0: { // C.SUB
+								PR("C.SUB %s %s %s", get_ireg_name(rd), get_ireg_name(rd), get_ireg_name(rs2));
+								s.reg[rd] = (int32_t) (s.reg[rd] - s.reg[rs2]);
+								C_NEXT_INSTR;
+							}
+							case 1: { // C.XOR
+								PR("C.XOR %s %s %s", get_ireg_name(rd), get_ireg_name(rd), get_ireg_name(rs2));
+								s.reg[rd] = s.reg[rd] ^ s.reg[rs2];
+								C_NEXT_INSTR;
+							}
+							case 2: { // C.OR
+								PR("C.OR %s %s %s", get_ireg_name(rd), get_ireg_name(rd), get_ireg_name(rs2));
+								s.reg[rd] = s.reg[rd] | s.reg[rs2];
+								C_NEXT_INSTR;
+							}
+							case 3: { // C.AND
+								PR("C.AND %s %s %s", get_ireg_name(rd), get_ireg_name(rd), get_ireg_name(rs2));
+								s.reg[rd] = s.reg[rd] & s.reg[rs2];
+								C_NEXT_INSTR;
+							}
+							default:
+								ILL_INSTR;
+						}
+					}
+				}
+				case 0b101: { // C.J
+					int32_t imm = GET_C_IMM_CJ(instr);
+
+					PR("C.J 0x%x", imm);
+
+					s.pc = (int32_t) (s.pc + imm);
+
+					JUMP_INSTR;
+				}
+				case 0b110: { // C.BEQZ
+					int32_t imm = GET_C_IMM_CBR(instr);
+					uint8_t rs1 = GET_C_RS1_COMP(instr);
+					PR("C.BEQZ %s %x", get_ireg_name(rs1), imm);
+					if (s.reg[rs1] == 0) {
+						s.pc += imm;
+						JUMP_INSTR;
+					}
+					C_NEXT_INSTR;
+				}
+				case 0b111: { // C.BNEZ
+					int32_t imm = GET_C_IMM_CBR(instr);
+					uint8_t rs1 = GET_C_RS1_COMP(instr);
+					PR("C.BNEZ %s %x", get_ireg_name(rs1), imm);
+					if (s.reg[rs1] != 0) {
+						s.pc += imm;
+						JUMP_INSTR;
+					}
+					C_NEXT_INSTR;
+				}
+				default:
+					ILL_INSTR;
+			}
+		}
+			break;
+		case 0x2: {// quadrant 2
+			uint8_t funct3 = GET_C_FUNCT3(instr);
+
+			switch (funct3) {
+				case 0b000: { // C.SLLI
+					uint8_t rd = GET_C_RD(instr);
+					uint8_t shamt = GET_C_IMM_CB(instr);
+
+					PR("C.SLLI %s %x", get_ireg_name(rd), shamt);
+
+					if (shamt & (1 << 5)) {
+						ILL_INSTR;
+					}
+
+					if (rd != 0) {
+						s.reg[rd] = (int32_t) (s.reg[rd] << shamt);
+					}
+
+					C_NEXT_INSTR;
+				}
+				case 0b010: { // C.LWSP
+					int32_t imm = GET_C_IMM_CI(instr);
+					uint8_t rd = GET_C_RD(instr);
+					uint32_t data = 0;
+					uint32_t addr = s.reg[2] + imm;
+					mmu_error_t res = MMU_OK;
+
+					PR("C.LWSP %s, 0x%x", get_ireg_name(rd), imm);
+
+					if ((res = mmu_read_u32(addr, &data)) != MMU_OK) {
+						LOAD_MEM_FAULT;
+					}
+
+					if (rd != 0) {
+						s.reg[rd] = (int32_t) data;
+					}
+
+					C_NEXT_INSTR;
+				}
+				case 0b100: {
+					uint8_t rd = GET_C_RD(instr);
+					uint8_t rs2 = GET_C_RS2(instr);
+
+					if (get_instr_piece(instr, 12, 0x1) == 0) {
+						if (rs2 == 0) { // C.JR
+							if (rd == 0) {
+								ILL_INSTR;
+							}
+							PR("C.JR %s", get_ireg_name(rd));
+							s.pc = s.reg[rd] & ~1;
+							JUMP_INSTR;
+						} else { // C.MV
+							PR("C.MV %s, %s", get_ireg_name(rd), get_ireg_name(rs2));
+							if (rd != 0) {
+								s.reg[rd] = s.reg[rs2];
+							}
+							C_NEXT_INSTR;
+						}
+					} else {
+						if (rd == 0 && rs2 == 0) { // C.EBREAK
+							PR("C.EBREAK");
+							s.pending_exception = BREAKPOINT;
+							s.pending_tval = 0;
+							goto exception;
+						} else if (rd != 0 && rs2 == 0) { // C.JALR
+							PR("C.JALR %s", get_ireg_name(rd));
+							uint32_t val = s.pc + 2;
+							s.pc = s.reg[rd] & ~1;
+							s.reg[1] = val;
+							JUMP_INSTR;
+						} else { // C.ADD
+							PR("C.ADD %s, %s", get_ireg_name(rd), get_ireg_name(rs2));
+							if (rd != 0) {
+								s.reg[rd] = (int32_t) (s.reg[rd] + s.reg[rs2]);
+							}
+							C_NEXT_INSTR;
+						}
+					}
+				}
+				case 0b110: { // C.SWSP
+					int32_t imm = GET_C_IMM_CSS(instr);
+					uint8_t rd = GET_C_RS2(instr);
+					uint32_t addr = s.reg[2] + imm;
+					mmu_error_t res = MMU_OK;
+
+					PR("C.SWSP %s, 0x%x", get_ireg_name(rd), imm);
+
+					if ((res = mmu_write_u32(addr, s.reg[rd])) != MMU_OK) {
+						STORE_MEM_FAULT;
+					}
+
+					C_NEXT_INSTR;
+				}
+				default:
+					ILL_INSTR;
+			}
+
+			ILL_INSTR;
+		}
+	}
+
+illegal_instr:
+	s.pending_exception = ILLEGAL_INSTRUCTION;
+	s.pending_tval = instr;
+exception:
+	raise_exception(s.pending_exception, s.pending_tval);
+next_instr:
+	return true;
+not_compressed_instr:
+	return false;
+}
+
 /* This function runs only one opcode and exits */
-static inline bool rv32_run_instr(uint32_t instr) {
+static inline bool rv32_exec_instr(uint32_t instr) {
 	uint8_t opcode = GET_OPCODE(instr);
+
+	if (rv32_exec_compressed_instr(instr & 0xffff)) {
+		goto next_instr;
+	}
+
+	PR("OPCODE IS 0x%08x", instr);
 
 	switch (opcode) {
 		case OP: {
@@ -755,22 +1121,26 @@ static inline bool rv32_run_instr(uint32_t instr) {
 						PR("REMU %s %s %s", get_ireg_name(rd), get_ireg_name(rs1), get_ireg_name(rs2));
 						NEXT_INSTR;
 					}
+					default:
+						ILL_INSTR;
 				}
 			} else {
 				switch (funct3) {
 					case 0: {
 						if (funct7 == 0b0100000) {
 							if (rd != 0) {
-								s.reg[rd] = (int32_t) ((int32_t)s.reg[rs1] - (int32_t)s.reg[rs2]);
+								s.reg[rd] = (int32_t) ((int32_t) s.reg[rs1] - (int32_t) s.reg[rs2]);
 							}
 							PR("SUB %s %s %s", get_ireg_name(rd), get_ireg_name(rs1), get_ireg_name(rs2));
 							NEXT_INSTR;
-						} else {
+						} else if (funct7 == 0b0000000) {
 							if (rd != 0) {
-								s.reg[rd] = (int32_t) ((int32_t)s.reg[rs1] + (int32_t)s.reg[rs2]);
+								s.reg[rd] = (int32_t) ((int32_t) s.reg[rs1] + (int32_t) s.reg[rs2]);
 							}
 							PR("ADD %s %s %s", get_ireg_name(rd), get_ireg_name(rs1), get_ireg_name(rs2));
 							NEXT_INSTR;
+						} else {
+							ILL_INSTR;
 						}
 					}
 					case 1: {
@@ -804,7 +1174,7 @@ static inline bool rv32_run_instr(uint32_t instr) {
 					case 5: {
 						if (funct7 == 0b0100000) {
 							if (rd != 0) {
-								s.reg[rd] = ((int32_t)s.reg[rs1] >> (s.reg[rs2] & 0x1f));
+								s.reg[rd] = ((int32_t) s.reg[rs1] >> (s.reg[rs2] & 0x1f));
 							}
 
 							PR("SRA %s %s %s", get_ireg_name(rd), get_ireg_name(rs1), get_ireg_name(rs2));
@@ -812,7 +1182,7 @@ static inline bool rv32_run_instr(uint32_t instr) {
 							NEXT_INSTR;
 						} else {
 							if (rd != 0) {
-								s.reg[rd] = ((uint32_t)s.reg[rs1] >> (s.reg[rs2] & 0x1f));
+								s.reg[rd] = ((uint32_t) s.reg[rs1] >> (s.reg[rs2] & 0x1f));
 							}
 
 							PR("SRL %s %s %s", get_ireg_name(rd), get_ireg_name(rs1), get_ireg_name(rs2));
@@ -834,6 +1204,8 @@ static inline bool rv32_run_instr(uint32_t instr) {
 						PR("AND %s %s %s", get_ireg_name(rd), get_ireg_name(rs1), get_ireg_name(rs2));
 						NEXT_INSTR;
 					}
+					default:
+						ILL_INSTR;
 				}
 			}
 		}
@@ -867,7 +1239,7 @@ static inline bool rv32_run_instr(uint32_t instr) {
 					int32_t imm = GET_IMM_I(instr);
 
 					if (rd != 0) {
-						s.reg[rd] = (int32_t)s.reg[rs1] < imm;
+						s.reg[rd] = (int32_t) s.reg[rs1] < imm;
 					}
 
 					PR("SLTI %s %s %d", get_ireg_name(rd), get_ireg_name(rs1), imm);
@@ -899,7 +1271,7 @@ static inline bool rv32_run_instr(uint32_t instr) {
 
 					if (funct7 == 0b0100000) {
 						if (rd != 0) {
-							s.reg[rd] = (int32_t)s.reg[rs1] >> (shamt & 0x1f);
+							s.reg[rd] = (int32_t) s.reg[rs1] >> (shamt & 0x1f);
 						}
 
 						PR("SRAI %s %s 0x%x", get_ireg_name(rd), get_ireg_name(rs1), shamt);
@@ -935,7 +1307,8 @@ static inline bool rv32_run_instr(uint32_t instr) {
 					PR("ANDI %s %s %d", get_ireg_name(rd), get_ireg_name(rs1), imm);
 					NEXT_INSTR;
 				}
-
+				default:
+					ILL_INSTR;
 			}
 		}
 		case BRANCH: {
@@ -1003,6 +1376,9 @@ static inline bool rv32_run_instr(uint32_t instr) {
 						NEXT_INSTR;
 					}
 				}
+
+				default:
+					ILL_INSTR;
 			}
 		}
 		case LUI:
@@ -1030,7 +1406,7 @@ static inline bool rv32_run_instr(uint32_t instr) {
 
 			PR("JAL %s 0x%x", get_ireg_name(rd), imm);
 
-			s.pc = (int32_t)(s.pc + imm);
+			s.pc = (int32_t) (s.pc + imm);
 
 			if (rd != 0) {
 				s.reg[rd] = val;
@@ -1047,7 +1423,7 @@ static inline bool rv32_run_instr(uint32_t instr) {
 
 			PR("JALR %s %s 0x%x", get_ireg_name(rd), get_ireg_name(rs1), imm);
 
-			s.pc = (int32_t)(s.reg[rs1] + imm) & ~1;
+			s.pc = (int32_t) (s.reg[rs1] + imm) & ~1;
 
 			if (rd != 0) {
 				s.reg[rd] = val;
@@ -1076,40 +1452,40 @@ static inline bool rv32_run_instr(uint32_t instr) {
 						LOAD_MEM_FAULT;
 					}
 					val = sext(data, 8);
-				}
 					break;
+				}
 				case 1: {
 					uint16_t data;
 					if ((res = mmu_read_u16(addr, &data)) != MMU_OK) {
 						LOAD_MEM_FAULT;
 					}
 					val = sext(data, 16);
-				}
 					break;
+				}
 				case 2: {
 					uint32_t data;
 					if ((res = mmu_read_u32(addr, &data)) != MMU_OK) {
 						LOAD_MEM_FAULT;
 					}
 					val = sext(data, 32);
-				}
 					break;
+				}
 				case 4: {
 					uint8_t data;
 					if ((res = mmu_read_u8(addr, &data)) != MMU_OK) {
 						LOAD_MEM_FAULT;
 					}
 					val = data;
-				}
 					break;
+				}
 				case 5: {
 					uint16_t data;
 					if ((res = mmu_read_u16(addr, &data)) != MMU_OK) {
 						LOAD_MEM_FAULT;
 					}
 					val = data;
-				}
 					break;
+				}
 				default:
 					ILL_INSTR;
 			}
@@ -1133,24 +1509,21 @@ static inline bool rv32_run_instr(uint32_t instr) {
 			const char *s_instr[] = {"SB", "SH", "SW"};
 
 			switch (width) {
-				case 0: {
-					if ((res = mmu_write_u8(addr, (int8_t)val)) != MMU_OK) {
+				case 0:
+					if ((res = mmu_write_u8(addr, (int8_t) val)) != MMU_OK) {
 						STORE_MEM_FAULT;
 					}
-				}
-				break;
-				case 1: {
-					if ((res = mmu_write_u16(addr, (int16_t)val)) != MMU_OK) {
+					break;
+				case 1:
+					if ((res = mmu_write_u16(addr, (int16_t) val)) != MMU_OK) {
 						STORE_MEM_FAULT;
 					}
-				}
-				break;
-				case 2: {
+					break;
+				case 2:
 					if ((res = mmu_write_u32(addr, val)) != MMU_OK) {
 						STORE_MEM_FAULT;
 					}
-				}
-				break;
+					break;
 				default:
 					ILL_INSTR;
 			}
@@ -1195,16 +1568,7 @@ static inline bool rv32_run_instr(uint32_t instr) {
 							}
 							PR("ECALL");
 
-//							printf("ECALL INTERCEPT\n");
-//							for (int i = 1; i < 32; ++i) {
-//								if ((i % 8) == 7) {
-//									printf("\n");
-//								}
-//
-//								printf("%s = 0x%08x ; ", get_ireg_name(i), s.reg[i]);
-//							}
-//							printf("\n");
-//							_exit(0);
+							// TODO: add a testmode to catch ECALL with a17 == 93 or a0 with 1
 
 							s.pending_exception = ENVIRONMENT_CALL_FROM_UMODE + s.prv;
 							s.pending_tval = 0;
@@ -1238,12 +1602,7 @@ static inline bool rv32_run_instr(uint32_t instr) {
 								ILL_INSTR;
 							}
 							PR("WFI");
-							logger("WAITING FOR INTERRUPTS AND ENJOYING LIFE! 0x%x\r\n", s.pc);
-							if ((s.mip & s.mie) == 0) {
-								s.wait_for_interrupts = true;
-								goto end;
-								/* just end this switch case */
-							}
+							NEXT_INSTR;
 							break;
 						case 0x302:
 							if (instr & 0x000fff80) {
@@ -1259,6 +1618,7 @@ static inline bool rv32_run_instr(uint32_t instr) {
 						default:
 							if ((imm >> 5) == 0b0001001) {
 								PR("SFENCE.VMA");
+								tlb_flush();
 								NEXT_INSTR;
 							} else {
 								ILL_INSTR;
@@ -1617,15 +1977,11 @@ illegal_instr:
 	s.pending_tval = instr;
 exception:
 	raise_exception(s.pending_exception, s.pending_tval);
-end:
 	return true;
 }
 
 
-static void dump_cpu_info(void) {
-	if (!debug) {
-		return;
-	}
+static inline void dump_cpu_info(void) {
 	for (int i = 1; i < 32; ++i) {
 		logger("%s = 0x%08x ; ", get_ireg_name(i), s.reg[i]);
 
@@ -1636,46 +1992,97 @@ static void dump_cpu_info(void) {
 	logger("\n");
 }
 
+bool rv32_get_mip(mip_flags fl) {
+	return !!(s.mip & fl);
+}
 
-void rv32_run_until(void) {
+void rv32_reset_mip(mip_flags fl) {
+	s.mip &= ~fl;
+}
+
+void rv32_set_mip(mip_flags fl) {
+	s.mip |= fl;
+}
+
+void rv32_raise_interrupts(void) {
+	uint32_t pending_ints = s.mie & s.mip;
+	uint32_t en_ints = 0;
+
+	if (!pending_ints) {
+		return;
+	}
+
+	switch (s.prv) {
+		case PRV_M:
+			if (s.mstatus_mie) {
+				en_ints = ~s.mideleg;
+			}
+			break;
+		case PRV_S:
+			en_ints = ~s.mideleg;
+			if (s.mstatus_sie) {
+				en_ints |= s.mideleg;
+			}
+			break;
+		case PRV_U:
+			en_ints = -1;
+			break;
+		default:
+			break;
+	}
+
+	en_ints &= pending_ints;
+
+	if (en_ints == 0) {
+		return;
+	}
+
+	if (en_ints & MIP_SSIP) {
+		raise_interrupt(SUPERVISOR_SOFTWARE_INTERRUPT);
+	} else if (en_ints & MIP_STIP) {
+		raise_interrupt(SUPERVISOR_TIMER_INTERRUPT);
+	} else if (en_ints & MIP_SEIP) {
+		raise_interrupt(SUPERVISOR_EXTERNAL_INTERRUPT);
+	} else if (en_ints & MIP_MSIP) {
+		raise_interrupt(MACHINE_SOFTWARE_INTERRUPT);
+	} else if (en_ints & MIP_MTIP) {
+		raise_interrupt(MACHINE_TIMER_INTERRUPT);
+	} else if (en_ints & MIP_MEIP) {
+		raise_interrupt(MACHINE_EXTERNAL_INTERRUPT);
+	}
+}
+
+void rv32_run(uint64_t cycles) {
 	uint32_t opcode = 0;
 	mmu_error_t res = MMU_OK;
 
-	while (1) {
-		if (s.wait_for_interrupts) {
-			if ((s.mie & s.mip) == 0) {
-				continue;
-			} else {
-				s.wait_for_interrupts = false;
-			}
-		}
-
-		// TODO: call somewhere raise_interrupts()
-		clint_iter(&s.mip);
-
+	while (cycles--) {
 		PR("PC IS 0x%08x", s.pc);
 		if ((res = mmu_exec_u32(s.pc, &opcode)) != MMU_OK) {
 			raise_exception((res == MMU_ACCESS_FAULT) ? INSTRUCTION_ACCESS_FAULT : INSTRUCTION_PAGE_FAULT, s.pc);
 			continue;
 		}
-		PR("OPCODE IS 0x%08x", opcode);
-		if (rv32_run_instr(opcode)) {
+		s.instr_cnt++;
+		if (rv32_exec_instr(opcode)) {
 			continue;
 		}
 		dump_cpu_info();
-		logger("\n");
+		PR("");
 	}
 }
 
+uint64_t rv32_get_instr_cnt() {
+	return s.instr_cnt;
+}
+
 void rv32_init(void) {
-	s.wait_for_interrupts = false;
 	s.mhartid = 0;
 	s.pc = 0x80000000;
 	s.reg[0xa] = 0x0;
 	s.reg[0xb] = 0x00001000;
 
 	s.prv = PRV_M;
-	s.misa = MISA_SUPER | MISA_USER | MISA_I | MISA_M | MISA_A | MISA_32BIT;
+	s.misa = MISA_SUPER | MISA_USER | MISA_I | MISA_M | MISA_A | MISA_C | MISA_32BIT;
 
 	mmu_init(&s);
 }

@@ -3,9 +3,12 @@
 //
 
 #include <stdio.h>
+#include <time.h>
 #include "clint.h"
 #include "memmap.h"
 #include "rv32.h"
+
+#define ACCESS_SIZE 4
 
 #define CLINT_BASE_ADDR 0x2000000
 #define CLINT_WINDOW    0x10000
@@ -25,84 +28,91 @@
 #define MTIMECMPH_BASE   (CLINT_BASE_ADDR + 0x4004)
 #define MTIMECMPH_WINDOW (MTIMECMPH_BASE + 0x4)
 
-static uint32_t clint_read_handler(uint32_t address, int size);
-static void clint_write_handler(uint32_t address, uint32_t data, int size);
+#define RTC_FREQ 10000000
 
-static union {
-    uint64_t mtime;
-    struct {
-        uint32_t mtimel;
-        uint32_t mtimeh;
-    };
-} mtime;
+static bool clint_read_handler(uint32_t address, uint32_t *data, int size);
 
-static union {
-    uint64_t mtimecmp;
-    struct {
-        uint32_t mtimecmpl;
-        uint32_t mtimecmph;
-    };
-} mtimecmp;
+static bool clint_write_handler(uint32_t address, uint32_t data, int size);
 
-static uint32_t msip;
+static uint64_t rtc_gettime(void);
+
+static uint64_t mtimecmp = 0;
+static uint32_t msip = 0;
 
 void clint_init(void) {
-    memmap_append(CLINT_BASE_ADDR, CLINT_BASE_ADDR + CLINT_WINDOW, DEVICE, clint_read_handler, clint_write_handler);
-    printf("CLINT inited\r\n");
+	memmap_append(CLINT_BASE_ADDR, CLINT_BASE_ADDR + CLINT_WINDOW, DEVICE, clint_read_handler, clint_write_handler);
+	printf("CLINT inited\r\n");
 }
 
-void clint_iter(uint32_t *mip) {
-    mtime.mtime++;
+void clint_check_time(void) {
+	long delay = 0;
+	if (!rv32_get_mip(MIP_MTIP)) {
+		delay = mtimecmp - rtc_gettime();
 
-    if (msip & 1) {
-        *mip |= (MIP_MSIP | MIP_SSIP);
-    }
-
-    if (mtime.mtime >= mtimecmp.mtimecmp) {
-        *mip |= (MIP_MTIP | MIP_STIP);
-    }
-
-    if (mtimecmp.mtimecmp > mtime.mtime) {
-        *mip &= ~(MIP_MTIP | MIP_STIP);
-    }
+		if (delay < 0) {
+			rv32_set_mip(MIP_MTIP);
+		}
+	}
 }
 
-static uint32_t clint_read_handler(uint32_t address, int size) {
-    switch(address) {
-        case MSIP_BASE ... MSIP_WINDOW - 1: {
-            return read_unaligned_reg(address - MSIP_BASE, msip, size);
-        }
-        case MTIMECMPL_BASE ... MTIMECMPL_WINDOW - 1: {
-            return read_unaligned_reg(address - MTIMECMPL_BASE, mtimecmp.mtimecmpl, size);
-        }
-        case MTIMECMPH_BASE ... MTIMECMPH_WINDOW - 1: {
-            return read_unaligned_reg(address - MTIMECMPH_BASE, mtimecmp.mtimecmph, size);
-        }
-        case MTIMEL_BASE ... MTIMEL_WINDOW - 1: {
-            return read_unaligned_reg(address - MTIMEL_BASE, mtime.mtimel, size);
-        }
-        case MTIMEH_BASE ... MTIMEH_WINDOW - 1: {
-            return read_unaligned_reg(address - MTIMEH_BASE, mtime.mtimeh, size);
-        }
-        default: {
-            return 0;
-        }
-    }
+uint64_t clint_mtime(void) {
+	return rtc_gettime();
 }
 
-static void clint_write_handler(uint32_t address, uint32_t data, int size) {
-    switch(address) {
-        case MSIP_BASE ... MSIP_WINDOW - 1: {
-            write_unaligned_reg(address - MSIP_BASE, data, &msip, size);
-        }
-        case MTIMECMPL_BASE ... MTIMECMPL_WINDOW - 1: {
-            write_unaligned_reg(address - MTIMECMPL_BASE, data, &mtimecmp.mtimecmpl, size);
-        }
-        case MTIMECMPH_BASE ... MTIMECMPH_WINDOW - 1: {
-            write_unaligned_reg(address - MTIMECMPH_BASE, data, &mtimecmp.mtimecmph, size);
-        }
-        default: {
-            // I don't know what to do here
-        }
-    }
+static bool clint_read_handler(uint32_t address, uint32_t *data, int size) {
+	if (size != ACCESS_SIZE) {
+		return false;
+	}
+
+	switch (address) {
+		case MSIP_BASE ... MSIP_WINDOW - 1:
+			*data = msip;
+			break;
+		case MTIMECMPL_BASE ... MTIMECMPL_WINDOW - 1:
+			*data = mtimecmp & 0xffffffff;
+			break;
+		case MTIMECMPH_BASE ... MTIMECMPH_WINDOW - 1:
+			*data = mtimecmp >> 32;
+			break;
+		case MTIMEL_BASE ... MTIMEL_WINDOW - 1:
+			*data = rtc_gettime() & 0xffffffff;
+			break;
+		case MTIMEH_BASE ... MTIMEH_WINDOW - 1:
+			*data = rtc_gettime() >> 32;
+			break;
+		default:
+			return false;
+	}
+
+	return true;
+}
+
+static bool clint_write_handler(uint32_t address, uint32_t data, int size) {
+	if (size != ACCESS_SIZE) {
+		return false;
+	}
+
+	switch (address) {
+		case MSIP_BASE ... MSIP_WINDOW - 1:
+			if (data & 1) {
+				rv32_set_mip(MIP_MSIP);
+			}
+			break;
+		case MTIMECMPL_BASE ... MTIMECMPL_WINDOW - 1:
+			mtimecmp = (mtimecmp & ~0xffffffff) | data;
+			rv32_reset_mip(MIP_MTIP);
+			break;
+		case MTIMECMPH_BASE ... MTIMECMPH_WINDOW - 1:
+			mtimecmp = (mtimecmp & 0xffffffff) | ((uint64_t) data << 32);
+			rv32_reset_mip(MIP_MTIP);
+			break;
+		default:
+			return false;
+	}
+
+	return true;
+}
+
+static uint64_t rtc_gettime(void) {
+	return rv32_get_instr_cnt();
 }

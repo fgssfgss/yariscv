@@ -9,6 +9,12 @@
 
 #define IREG_MAX 32
 
+typedef enum {
+	PRV_U = 0,
+	PRV_S = 1,
+	PRV_M = 3
+} priv_m;
+
 struct rv32_state_s {
     uint32_t reg[IREG_MAX];
     uint32_t pc;
@@ -41,7 +47,6 @@ struct rv32_state_s {
 
     bool m_vectored_interrupts;
     bool s_vectored_interrupts;
-    bool wait_for_interrupts;
     int pending_exception;
     uint32_t pending_tval;
 

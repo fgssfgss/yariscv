@@ -3,11 +3,12 @@
     #address-cells = <2>;
     #size-cells = <2>;
     compatible = "riscv-virtio";
-    model = "riscv-virtio,qemu";
+    model = "yariscvemu";
 
     chosen {
-        bootargs = "earlycon=sbi earlyprintk root=/dev/vda ro console=ttySU0";
-        stdout-path = "/uart@1000000";
+        bootargs = "earlycon=sbi console=hvc0";
+        linux,initrd-start = <0x82800000>;
+        linux,initrd-end = <0x82c00000>;
     };
 
     cpus {
@@ -19,7 +20,7 @@
             device_type = "cpu";
             reg = <0>;
             compatible = "riscv";
-            riscv,isa = "rv32imasu";
+            riscv,isa = "rv32imacsu";
             mmu-type = "riscv,sv32";
             clock-frequency = <10000000>;
             cpu0_intc: interrupt-controller {
@@ -49,7 +50,6 @@
             interrupts-extended =  <&cpu0_intc 3 &cpu0_intc 7>;
         };
 
-        /* FIXME: This is probably not correct for now */
         plic0: interrupt-controller@c000000 {
             #address-cells = <2>;
             #interrupt-cells = <1>;
@@ -62,8 +62,10 @@
         };
 
         uart0: serial@1000000 {
-            compatible = "litex,uart0";
-            reg = <0x0 0x1000000 0x0 0x18>;
+            compatible = "litex,liteuart";
+            device_type = "serial";
+            clock-frequency = <0x384000>;
+            reg = <0x0 0x1000000 0x0 0x100>;
         };
     };
 };

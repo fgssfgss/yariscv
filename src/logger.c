@@ -7,42 +7,33 @@
 #include <stdbool.h>
 
 static FILE *log_output;
-static bool disabled = true;
-
-void logger_init(FILE *fp) {
-    log_output = fp;
-    disabled = false;
-}
+static bool enabled = false;
 
 void logger_init_path(const char *path) {
-    FILE *fp = fopen(path, "a+");
+	FILE *fp = fopen(path, "a+");
 
-    if(fp == NULL) {
-        printf("WTF????? CANNOT OPEN LOG FILE!!!\r\n");
-        return;
-    }
+	if (fp == NULL) {
+		printf("CANNOT OPEN LOG FILE!\r\n");
+		return;
+	}
 
-    log_output = fp;
+	log_output = fp;
 
-    disabled = false;
+	enabled = true;
 
-    fprintf(log_output, "Start logger!\r\n");
+	fprintf(log_output, "Start logger!\r\n");
 }
 
-void logger_disable(void) {
-	disabled = true;
-}
+void logger_real(char *fmt, ...) {
+	va_list arg;
 
-void logger(char *fmt, ...) {
-    va_list arg;
+	if (!enabled) {
+		return;
+	}
 
-    if (disabled) {
-    	return;
-    }
+	va_start(arg, fmt);
+	vfprintf(log_output, fmt, arg);
+	va_end(arg);
 
-    va_start(arg, fmt);
-    vfprintf(log_output, fmt, arg);
-    va_end(arg);
-
-    fflush(log_output);
+	fflush(log_output);
 }

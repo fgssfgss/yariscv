@@ -9,30 +9,40 @@
 
 static uint64_t loader_get_filesize(FILE *fp);
 
-bool loader_load(const char *filename, memmap_entry_t *out, uintptr_t offset) {
-    if (out == NULL || out->type != RAM) {
-        return false;
-    }
+bool loader_load(const char *filename, uint32_t address) {
+	memmap_entry_t *out = memmap_get(address);
+	uintptr_t offset = 0;
 
-    FILE *fp = fopen(filename, "rb");
-    if (fp == NULL) {
-        return false;
-    }
+	if (out == NULL || out->type != RAM) {
+		return false;
+	}
 
-    uint64_t sz = loader_get_filesize(fp);
-    if (sz == 0 || sz > (out->end - out->start)) {
-        return false;
-    }
+	offset = address - out->start;
 
-    fread((void *)(out->phys_mem + offset), sz, sizeof(char), fp);
+	FILE *fp = fopen(filename, "rb");
+	if (fp == NULL) {
+		return false;
+	}
 
-    return true;
+	uint64_t sz = loader_get_filesize(fp);
+	if (sz == 0 || sz > (out->end - out->start)) {
+		return false;
+	}
+
+	printf("Loading '%s' at 0x%08lx, size is %08lx\n", filename, offset + out->start, sz);
+
+	if (fread((void *) (out->phys_mem + offset), sizeof(char), sz, fp) != (sz * sizeof(char))) {
+		printf("Failed to write to the memory!\n");
+		return false;
+	}
+
+	return true;
 }
 
 static uint64_t loader_get_filesize(FILE *fp) {
-    uint64_t sz = 0;
-    fseek(fp, 0L, SEEK_END);
-    sz = ftell(fp);
-    fseek(fp, 0L, SEEK_SET);
-    return sz;
+	uint64_t sz = 0;
+	fseek(fp, 0L, SEEK_END);
+	sz = ftell(fp);
+	fseek(fp, 0L, SEEK_SET);
+	return sz;
 }

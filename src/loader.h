@@ -8,6 +8,6 @@
 #include <stdbool.h>
 #include "memmap.h"
 
-bool loader_load(const char *filename, memmap_entry_t *out, uintptr_t offset);
+bool loader_load(const char *filename, uint32_t address);
 
 #endif //YARISCVEMU_LOADER_H
