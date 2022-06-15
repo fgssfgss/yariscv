@@ -47,8 +47,8 @@ int yariscvemu_init(int argc, char *argv[]) {
 	console_init();
 
 	memmap_init();
-	memmap_append(LOWMEM_BASE, LOWMEM_BASE + LOWMEM_SIZE, RAM, NULL, NULL);
 	memmap_append(RAM_BASE, RAM_BASE + RAM_SIZE, RAM, NULL, NULL);
+	memmap_append(LOWMEM_BASE, LOWMEM_BASE + LOWMEM_SIZE, RAM, NULL, NULL);
 
 	uart_init();
 	plic_init();
@@ -79,7 +79,7 @@ void yariscvemu_running(bool run) {
 
 void yariscvemu_run(void) {
 	while (running) {
-		rv32_run(10000);
+		rv32_run(50000);
 		console_read();
 		clint_check_time();
 		rv32_raise_interrupts();
@@ -160,7 +160,7 @@ static void yariscvemu_parse_arguments(int argc, char *argv[]) {
 
 #ifndef NDEBUG
 	if (log_path == NULL) {
-		log_path = "/tmp/out.txt";
+		log_path = "/mnt/tmpfs-folder/out.txt";
 	}
 #endif
 }

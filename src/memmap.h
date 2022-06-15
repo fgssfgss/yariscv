@@ -19,7 +19,7 @@ typedef enum {
 
 typedef struct memmap_entry_s {
 	uint32_t start;
-	uint32_t end;
+	uint32_t size;
 
 	memtype type;
 

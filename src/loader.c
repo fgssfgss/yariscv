@@ -25,7 +25,7 @@ bool loader_load(const char *filename, uint32_t address) {
 	}
 
 	uint64_t sz = loader_get_filesize(fp);
-	if (sz == 0 || sz > (out->end - out->start)) {
+	if (sz == 0 || sz > out->size) {
 		return false;
 	}
 
@@ -46,3 +46,4 @@ static uint64_t loader_get_filesize(FILE *fp) {
 	fseek(fp, 0L, SEEK_SET);
 	return sz;
 }
+
