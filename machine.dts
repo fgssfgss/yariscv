@@ -6,7 +6,7 @@
     model = "yariscvemu";
 
     chosen {
-        bootargs = "earlycon=sbi console=hvc0";
+        bootargs = "earlycon=sbi console=hvc0 init=/init";
         linux,initrd-start = <0x82800000>;
         linux,initrd-end = <0x82c00000>;
     };
@@ -44,7 +44,6 @@
         ranges;
 
         clint0: clint@2000000 {
-            #interrupt-cells = <1>;
             compatible = "riscv,clint0";
             reg = <0x0 0x2000000 0x0 0xC000>;
             interrupts-extended =  <&cpu0_intc 3 &cpu0_intc 7>;

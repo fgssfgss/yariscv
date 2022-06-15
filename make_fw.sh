@@ -7,17 +7,15 @@ BUSYBOX_SOURCE="https://busybox.net/downloads/busybox-$BUSYBOX_VERSION.tar.bz2"
 LINUX_CONFIG="./linux-config"
 BUSYBOX_CONFIG="./busybox-config"
 
-FW_BUILD_PATH="initramfs_dir"
+FW_BUILD_PATH=$(realpath ./initramfs_dir)
 
 CROSS_COMPILER=riscv32-unknown-linux-gnu-
 
-INIT_SCRIPT="#!/bin/busybox sh                      \r\n\
-                                                    \r\n\
+INIT_SCRIPT="#!/bin/busybox sh	                    \r\n\
 mount -t devtmpfs  devtmpfs  /dev                   \r\n\
 mount -t proc      proc      /proc                  \r\n\
 mount -t sysfs     sysfs     /sys                   \r\n\
 mount -t tmpfs     tmpfs     /tmp                   \r\n\
-                                                    \r\n\
 cat <<!                                             \r\n\
                                                     \r\n\
 Boot took \$(cut -d' ' -f1 /proc/uptime) seconds    \r\n\
@@ -28,7 +26,6 @@ Boot took \$(cut -d' ' -f1 /proc/uptime) seconds    \r\n\
 \/    \/_|_| |_|_| \____/_|_| |_|\__,_/_/\_\        \r\n\
                                                     \r\n\
 Welcome to mini_linux                               \r\n\
-                                                    \r\n\
 !                                                   \r\n\
 exec /bin/sh"                               
 
@@ -73,11 +70,19 @@ function build_sources()
 
 function build_initramfs()
 {
+	rm -rf $FW_BUILD_PATH/initramfs || die
+
 	mkdir -p $FW_BUILD_PATH/initramfs || die 
 	mkdir -p $FW_BUILD_PATH/initramfs/{bin,dev,etc,lib,mnt,proc,sbin,sys,tmp,var} || die 
+	
 	cp -R $FW_BUILD_PATH/busybox-$BUSYBOX_VERSION/_install/* $FW_BUILD_PATH/initramfs || die
-    echo -ne "$INIT_SCRIPT" >> $FW_BUILD_PATH/initramfs/init || die
-    find $FW_BUILD_PATH/initramfs/ | cpio -ov --format=newc | gzip -9 >$FW_BUILD_PATH/initramfz.cpio.gz || die 
+    
+	echo -ne "$INIT_SCRIPT" >> $FW_BUILD_PATH/initramfs/init || die
+	chmod +x $FW_BUILD_PATH/initramfs/init
+
+	pushd $FW_BUILD_PATH/initramfs
+	find . | cpio -ov --format=newc | gzip -9 >$FW_BUILD_PATH/initramfz.cpio.gz || die 
+	popd
 	echo "Ready to boot!"
 }
 
@@ -87,8 +92,8 @@ function copy_fw_initramfs()
     echo "Copied to $(realpath $FW_BUILD_PATH/../)"
 }
 
-#build_sources
-#build_initramfs 
+build_sources
+build_initramfs 
 copy_fw_initramfs
 echo "Done!"
 
